@@ -146,10 +146,8 @@ def analyze_mutation_distribution(file_path):
     })
     
     # 保存按位置的突变率统计结果
-    # position_rates.to_csv('position_mutation_rates.csv')  # 注释掉未归一化的结果保存
+    position_rates.to_csv(os.path.join(dirs['data_dir'], 'position_mutation_rates.csv'))
     
-    # 注释掉未归一化的可视化部分
-    '''
     # 可视化各种突变率沿序列位置的分布
     # 1. 总突变率分布
     plt.figure(figsize=(15, 6))
@@ -158,19 +156,35 @@ def analyze_mutation_distribution(file_path):
     plt.ylabel('平均突变率')
     plt.title('总突变率(ATCG)在不同序列位置的分布')
     plt.savefig(os.path.join(dirs['images_dir'], 'mutation_distribution.png'))
+    plt.close()
     
-    # 2. 各碱基突变率分布图
+    # 2. 各碱基突变率分布图 (toA/T/C/G)
     plt.figure(figsize=(15, 8))
-    plt.plot(position_rates.index, position_rates['ARate'], 'r-', label='A突变率')
-    plt.plot(position_rates.index, position_rates['TRate'], 'g-', label='T突变率')
-    plt.plot(position_rates.index, position_rates['CRate'], 'b-', label='C突变率')
-    plt.plot(position_rates.index, position_rates['GRate'], 'y-', label='G突变率')
+    plt.plot(position_rates.index, position_rates['ARate'], 'r-', label='突变为A(toA)')
+    plt.plot(position_rates.index, position_rates['TRate'], 'g-', label='突变为T(toT)')
+    plt.plot(position_rates.index, position_rates['CRate'], 'b-', label='突变为C(toC)')
+    plt.plot(position_rates.index, position_rates['GRate'], 'y-', label='突变为G(toG)')
     plt.xlabel('序列位置')
     plt.ylabel('碱基特异性突变率')
-    plt.title('不同碱基在各序列位置的突变率')
+    plt.title('不同碱基在各序列位置的突变率(toA/T/C/G)')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.savefig(os.path.join(dirs['images_dir'], 'base_specific_mutation_rates.png'))
+    plt.close()
+    
+    # 2.1 模板碱基突变率分布图 (Ato/Tto/Cto/Gto)
+    plt.figure(figsize=(15, 8))
+    plt.plot(position_rates.index, position_rates['Ato_MutRate'], 'r-', label='A位置突变率(Ato)')
+    plt.plot(position_rates.index, position_rates['Tto_MutRate'], 'g-', label='T位置突变率(Tto)')
+    plt.plot(position_rates.index, position_rates['Cto_MutRate'], 'b-', label='C位置突变率(Cto)')
+    plt.plot(position_rates.index, position_rates['Gto_MutRate'], 'y-', label='G位置突变率(Gto)')
+    plt.xlabel('序列位置')
+    plt.ylabel('碱基特异性突变率')
+    plt.title('不同模板碱基位置的突变率(Ato/Tto/Cto/Gto)')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.savefig(os.path.join(dirs['images_dir'], 'template_base_specific_mutation_rates.png'))
+    plt.close()
     
     # 3. 总缺失率分布图
     plt.figure(figsize=(15, 6))
@@ -179,6 +193,7 @@ def analyze_mutation_distribution(file_path):
     plt.ylabel('平均总缺失率')
     plt.title('总缺失率在不同序列位置的分布')
     plt.savefig(os.path.join(dirs['images_dir'], 'deletion_rate_distribution.png'))
+    plt.close()
     
     # 3.1 按碱基分类的缺失率分布图
     plt.figure(figsize=(15, 8))
@@ -192,6 +207,7 @@ def analyze_mutation_distribution(file_path):
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.savefig(os.path.join(dirs['images_dir'], 'base_specific_deletion_rates.png'))
+    plt.close()
     
     # 3.2 对比总缺失率和各碱基缺失率相加
     # 计算各碱基缺失率之和，应该等于总缺失率
@@ -207,6 +223,53 @@ def analyze_mutation_distribution(file_path):
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.savefig(os.path.join(dirs['images_dir'], 'total_vs_sum_deletion_rates.png'))
+    plt.close()
+    
+    # 3.3 模板碱基突变率与缺失率的对比
+    plt.figure(figsize=(15, 12))
+    # A的突变与缺失
+    plt.subplot(2, 2, 1)
+    plt.plot(position_rates.index, position_rates['Ato_MutRate'], 'r-', label='A位置突变率')
+    plt.plot(position_rates.index, position_rates['A_DelRate'], 'r--', label='A位置缺失率')
+    plt.xlabel('序列位置')
+    plt.ylabel('错误率')
+    plt.title('A位置的突变与缺失对比')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # T的突变与缺失
+    plt.subplot(2, 2, 2)
+    plt.plot(position_rates.index, position_rates['Tto_MutRate'], 'g-', label='T位置突变率')
+    plt.plot(position_rates.index, position_rates['T_DelRate'], 'g--', label='T位置缺失率')
+    plt.xlabel('序列位置')
+    plt.ylabel('错误率')
+    plt.title('T位置的突变与缺失对比')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # C的突变与缺失
+    plt.subplot(2, 2, 3)
+    plt.plot(position_rates.index, position_rates['Cto_MutRate'], 'b-', label='C位置突变率')
+    plt.plot(position_rates.index, position_rates['C_DelRate'], 'b--', label='C位置缺失率')
+    plt.xlabel('序列位置')
+    plt.ylabel('错误率')
+    plt.title('C位置的突变与缺失对比')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # G的突变与缺失
+    plt.subplot(2, 2, 4)
+    plt.plot(position_rates.index, position_rates['Gto_MutRate'], 'y-', label='G位置突变率')
+    plt.plot(position_rates.index, position_rates['G_DelRate'], 'y--', label='G位置缺失率')
+    plt.xlabel('序列位置')
+    plt.ylabel('错误率')
+    plt.title('G位置的突变与缺失对比')
+    plt.legend()
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(dirs['images_dir'], 'base_mut_vs_del_comparison.png'))
+    plt.close()
     
     # 4. 突变+缺失总率分布图
     plt.figure(figsize=(15, 6))
@@ -215,6 +278,7 @@ def analyze_mutation_distribution(file_path):
     plt.ylabel('突变+缺失总率')
     plt.title('突变+缺失总率在不同序列位置的分布')
     plt.savefig(os.path.join(dirs['images_dir'], 'total_mutation_deletion_rate.png'))
+    plt.close()
     
     # 5. 组合对比图
     plt.figure(figsize=(15, 8))
@@ -227,14 +291,14 @@ def analyze_mutation_distribution(file_path):
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.savefig(os.path.join(dirs['images_dir'], 'error_rate_comparison.png'))
-    '''
+    plt.close()
     
     # 打印额外的分析信息
-    print("\n位置特异性突变率统计已保存到 'position_mutation_rates.csv'")
+    print("\n位置特异性突变率统计已保存。")
     print("各种突变类型的位置分布图已生成。")
     
-    
-    # 位置归一化分析
+    '''
+    # 位置归一化分析（已注释）
     print("\n正在进行位置归一化分析...")
     
     # 将所有序列长度归一化为100个位置点
@@ -415,10 +479,10 @@ def analyze_mutation_distribution(file_path):
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.savefig(os.path.join(dirs['images_dir'], 'normalized_position_error_types_comparison.png'))
     
-    # 归一化位置的突变率分布
-    data_file = os.path.join(dirs['data_dir'], 'normalized_position_mutation_rates.csv')
-    norm_pos_rates.to_csv(data_file)
-    
+    # 归一化位置的突变率分布（已注释）
+    # data_file = os.path.join(dirs['data_dir'], 'normalized_position_mutation_rates.csv')
+    # norm_pos_rates.to_csv(data_file)
+    '''
     # 生成HTML报告
     report_path = generate_html_report(file_path, dirs)
     
@@ -510,13 +574,18 @@ def generate_html_report(input_file_path, dirs, output_path=None):
                 <h2>1. 总体突变分析</h2>
                 
                 <div class="figure-container">
-                    <img src="../images/normalized_position_mutation_rate.png" alt="总突变率分布">
-                    <div class="figure-title">图1: 归一化位置的总突变率分布</div>
+                    <img src="../images/mutation_distribution.png" alt="总突变率分布">
+                    <div class="figure-title">图1: 序列位置的总突变率分布</div>
                 </div>
                 
                 <div class="figure-container">
-                    <img src="../images/normalized_position_total_rate.png" alt="总突变+缺失率分布">
-                    <div class="figure-title">图2: 归一化位置的总突变+缺失率分布</div>
+                    <img src="../images/total_mutation_deletion_rate.png" alt="总突变+缺失率分布">
+                    <div class="figure-title">图2: 序列位置的总突变+缺失率分布</div>
+                </div>
+                
+                <div class="figure-container">
+                    <img src="../images/error_rate_comparison.png" alt="错误率对比">
+                    <div class="figure-title">图3: 不同错误类型在各序列位置的分布对比</div>
                 </div>
             </div>
             
@@ -524,8 +593,8 @@ def generate_html_report(input_file_path, dirs, output_path=None):
                 <h2>2. 目标碱基分析 (toA/T/C/G)</h2>
                 
                 <div class="figure-container">
-                    <img src="../images/normalized_position_to_base_specific_rates.png" alt="目标碱基突变率">
-                    <div class="figure-title">图3: 突变至特定碱基的比率分布 (toA/toT/toC/toG)</div>
+                    <img src="../images/base_specific_mutation_rates.png" alt="目标碱基突变率">
+                    <div class="figure-title">图4: 突变至特定碱基的比率分布 (toA/toT/toC/toG)</div>
                 </div>
             </div>
             
@@ -533,28 +602,42 @@ def generate_html_report(input_file_path, dirs, output_path=None):
                 <h2>3. 模板碱基分析 (Ato/Tto/Cto/Gto)</h2>
                 
                 <div class="figure-container">
-                    <img src="../images/normalized_position_from_base_specific_rates.png" alt="模板碱基突变率">
-                    <div class="figure-title">图4: 不同位置碱基的突变率分布 (Ato/Tto/Cto/Gto)</div>
+                    <img src="../images/template_base_specific_mutation_rates.png" alt="模板碱基突变率">
+                    <div class="figure-title">图5: 不同位置碱基的突变率分布 (Ato/Tto/Cto/Gto)</div>
                 </div>
             </div>
             
             <div class="section page-break">
-                <h2>4. 碱基特异性突变与缺失对比</h2>
+                <h2>4. 缺失率分析</h2>
                 
                 <div class="figure-container">
-                    <img src="../images/normalized_position_base_mut_vs_del_comparison.png" alt="突变与缺失对比">
-                    <div class="figure-title">图5: 各碱基位置的突变与缺失率对比</div>
+                    <img src="../images/deletion_rate_distribution.png" alt="总缺失率">
+                    <div class="figure-title">图6: 序列位置的总缺失率分布</div>
                 </div>
                 
                 <div class="figure-container">
-                    <img src="../images/normalized_position_base_specific_deletion_rates.png" alt="碱基特异性缺失率">
-                    <div class="figure-title">图6: 不同碱基位置的缺失率分布</div>
+                    <img src="../images/base_specific_deletion_rates.png" alt="碱基特异性缺失率">
+                    <div class="figure-title">图7: 不同碱基位置的缺失率分布</div>
+                </div>
+                
+                <div class="figure-container">
+                    <img src="../images/total_vs_sum_deletion_rates.png" alt="总缺失率对比">
+                    <div class="figure-title">图8: 总缺失率与各碱基缺失率之和的对比</div>
+                </div>
+            </div>
+            
+            <div class="section page-break">
+                <h2>5. 碱基特异性突变与缺失对比</h2>
+                
+                <div class="figure-container">
+                    <img src="../images/base_mut_vs_del_comparison.png" alt="突变与缺失对比">
+                    <div class="figure-title">图9: 各碱基位置的突变与缺失率对比</div>
                 </div>
             </div>
             
             <div class="section">
-                <h2>5. 数据表格</h2>
-                <p>归一化位置突变率数据可在 <a href="../data/normalized_position_mutation_rates.csv">normalized_position_mutation_rates.csv</a> 文件中找到。位置1-100 为 5p-3p</p>
+                <h2>6. 数据表格</h2>
+                <p>位置突变率数据可在 <a href="../data/position_mutation_rates.csv">position_mutation_rates.csv</a> 文件中找到。</p>
             </div>
             
             <div class="section">
