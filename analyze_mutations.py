@@ -11,6 +11,155 @@ from tkinter import filedialog
 plt.rcParams['font.sans-serif'] = ['SimHei']  # For displaying Chinese characters if needed
 plt.rcParams['axes.unicode_minus'] = False  # For displaying negative sign correctly
 
+BASES = ['A', 'T', 'C', 'G']
+
+def _require_columns(df, required_cols):
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+def _safe_divide(num, den):
+    try:
+        if den == 0 or pd.isna(den):
+            return np.nan
+        return num / den
+    except Exception:
+        return np.nan
+
+def compute_global_summary(df):
+    """
+    Compute weighted (sum-based) global substitution/deletion rates and deletion-by-template.
+    """
+    _require_columns(df, ['Depths', 'Muts', 'delcount', 'Template'])
+
+    total_depths = float(df['Depths'].sum())
+    total_muts = float(df['Muts'].sum())
+    total_del = float(df['delcount'].sum())
+
+    summary = {
+        'total_depths': total_depths,
+        'total_substitution_muts': total_muts,
+        'total_deletions': total_del,
+        'substitution_total_rate': _safe_divide(total_muts, total_depths),
+        'deletion_total_rate': _safe_divide(total_del, total_depths),
+        'total_error_rate': _safe_divide(total_muts + total_del, total_depths),
+    }
+
+    del_by_template = (
+        df.groupby('Template')[['delcount', 'Depths']]
+          .sum()
+          .reindex(BASES)
+    )
+    del_by_template['DelRate'] = del_by_template['delcount'] / del_by_template['Depths']
+    del_by_template.index.name = 'Template'
+
+    return summary, del_by_template
+
+def compute_substitution_matrix(df):
+    """
+    Compute from->to substitution count matrix and percent matrix (off-diagonal sums to 100%).
+    """
+    _require_columns(df, ['Template'])
+    count_cols = [f"{b}count" for b in BASES]
+    _require_columns(df, count_cols)
+
+    by_from = df.groupby('Template')[count_cols].sum().reindex(BASES, fill_value=0)
+    counts = pd.DataFrame(0.0, index=BASES, columns=BASES)
+    for b in BASES:
+        counts[b] = by_from[f"{b}count"].astype(float).values
+
+    # Do not report diagonal as "substitution to self"
+    np.fill_diagonal(counts.values, 0.0)
+
+    total_sub_counts = float(np.nansum(counts.values))
+    if total_sub_counts > 0:
+        percent = counts / total_sub_counts * 100.0
+    else:
+        percent = counts.copy()
+
+    return counts, percent, total_sub_counts
+
+def compute_position_base_specific_deletion(df):
+    """
+    For each Pos, compute weighted deletion rate by template base (A/T/C/G).
+    """
+    _require_columns(df, ['Pos', 'Template', 'delcount', 'Depths'])
+    grouped = df.groupby(['Pos', 'Template'])[['delcount', 'Depths']].sum()
+    grouped['DelRate'] = grouped['delcount'] / grouped['Depths']
+    rates = grouped['DelRate'].unstack('Template').reindex(columns=BASES)
+    rates.index.name = 'Pos'
+    return rates
+
+def plot_substitution_matrix_heatmap(percent_matrix, summary, out_path):
+    data = percent_matrix.values.astype(float)
+    mask = np.eye(len(BASES), dtype=bool)
+    data_masked = np.ma.array(data, mask=mask)
+
+    plt.figure(figsize=(7, 6))
+    cmap = plt.cm.YlOrRd.copy()
+    cmap.set_bad(color='#eeeeee')
+    vmax = np.nanmax(data) if np.isfinite(data).any() else 1
+    if vmax == 0:
+        vmax = 1
+    im = plt.imshow(data_masked, cmap=cmap, vmin=0, vmax=vmax)
+    plt.colorbar(im, fraction=0.046, pad=0.04, label='Percent of substitutions (%)')
+    plt.xticks(range(len(BASES)), BASES)
+    plt.yticks(range(len(BASES)), BASES)
+    plt.xlabel('To (mutated base)')
+    plt.ylabel('From (template base)')
+    sub_rate = summary.get('substitution_total_rate', np.nan)
+    plt.title(f"Substitution Spectrum (Total substitution rate: {sub_rate:.6g})")
+
+    for i, fb in enumerate(BASES):
+        for j, tb in enumerate(BASES):
+            if i == j:
+                plt.text(j, i, '—', ha='center', va='center', color='#888888', fontsize=12)
+                continue
+            v = percent_matrix.loc[fb, tb]
+            if pd.isna(v):
+                txt = 'NA'
+            else:
+                txt = f"{v:.1f}%"
+            color = 'white' if (not pd.isna(v) and v >= 15) else 'black'
+            plt.text(j, i, txt, ha='center', va='center', color=color, fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+def plot_deletion_by_template_bar(del_by_template, summary, out_path):
+    plt.figure(figsize=(7, 5))
+    rates = del_by_template['DelRate'].reindex(BASES)
+    plt.bar(BASES, rates.values, color=['#4C78A8', '#F58518', '#54A24B', '#E45756'])
+    plt.xlabel('Template base')
+    plt.ylabel('Deletion rate (weighted)')
+    del_rate = summary.get('deletion_total_rate', np.nan)
+    plt.title(f"Deletion Rate by Template Base (Total deletion rate: {del_rate:.6g})")
+    for i, v in enumerate(rates.values):
+        if pd.isna(v):
+            continue
+        plt.text(i, v, f"{v:.2e}", ha='center', va='bottom', fontsize=9)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+def plot_position_base_specific_deletion_lines(pos_base_del_rates, out_path):
+    plt.figure(figsize=(15, 6))
+    x = pos_base_del_rates.index.values
+    colors = {'A': '#4C78A8', 'T': '#F58518', 'C': '#54A24B', 'G': '#E45756'}
+    for b in BASES:
+        if b not in pos_base_del_rates.columns:
+            continue
+        plt.plot(x, pos_base_del_rates[b].values, label=f'{b} deletion rate', linewidth=1.2, color=colors.get(b))
+    plt.xlabel('Position (Pos)')
+    plt.ylabel('Deletion rate (weighted)')
+    plt.title('Per-position Deletion Rate by Template Base')
+    plt.grid(True, linestyle='--', alpha=0.4)
+    plt.legend(ncol=4, fontsize=9)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
 def create_output_dirs(file_path):
     """
     Create output directory structure for the input file
@@ -71,13 +220,41 @@ def analyze_mutation_distribution(file_path):
     print(f"序列数量: {df['Chrom'].nunique()}")
     
     # 确保'Pos'和'Muts'列是数值型
-    df['Pos'] = pd.to_numeric(df['Pos'])
-    df['Muts'] = pd.to_numeric(df['Muts'])
-    df['Depths'] = pd.to_numeric(df['Depths'])
+    for col in ['Pos', 'Muts', 'Depths', 'delcount', 'Acount', 'Tcount', 'Ccount', 'Gcount']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
     
     # 计算每个序列的长度
     sequence_lengths = df.groupby('Chrom')['Pos'].max().to_dict()
     print(f"序列长度范围: {min(sequence_lengths.values())} - {max(sequence_lengths.values())}")
+
+    # ===== New: Global summary + substitution matrix + per-position base-specific deletions =====
+    summary, deletion_by_template = compute_global_summary(df)
+    sub_counts, sub_percent, total_sub_counts = compute_substitution_matrix(df)
+    pos_base_del_rates = compute_position_base_specific_deletion(df)
+
+    # Save new CSV outputs
+    pd.DataFrame([summary]).to_csv(os.path.join(dirs['data_dir'], 'global_summary.csv'), index=False)
+    deletion_by_template.to_csv(os.path.join(dirs['data_dir'], 'deletion_rate_by_template.csv'))
+    sub_counts.to_csv(os.path.join(dirs['data_dir'], 'substitution_matrix_counts.csv'))
+    sub_percent.to_csv(os.path.join(dirs['data_dir'], 'substitution_matrix_percent.csv'))
+    pos_base_del_rates.to_csv(os.path.join(dirs['data_dir'], 'position_base_specific_deletion_rates.csv'))
+
+    # New visualizations
+    plot_substitution_matrix_heatmap(
+        sub_percent,
+        summary,
+        os.path.join(dirs['images_dir'], 'substitution_matrix_heatmap.png'),
+    )
+    plot_deletion_by_template_bar(
+        deletion_by_template,
+        summary,
+        os.path.join(dirs['images_dir'], 'deletion_rate_by_template_bar.png'),
+    )
+    plot_position_base_specific_deletion_lines(
+        pos_base_del_rates,
+        os.path.join(dirs['images_dir'], 'position_base_specific_deletion_rates.png'),
+    )
     
     # 计算各种突变率
     df['MutationRate'] = df['Muts'] / df['Depths']  # 总突变率
@@ -484,7 +661,13 @@ def analyze_mutation_distribution(file_path):
     # norm_pos_rates.to_csv(data_file)
     '''
     # 生成HTML报告
-    report_path = generate_html_report(file_path, dirs)
+    report_data = {
+        'summary': summary,
+        'deletion_by_template': deletion_by_template,
+        'substitution_matrix_counts': sub_counts,
+        'substitution_matrix_percent': sub_percent,
+    }
+    report_path = generate_html_report(file_path, dirs, report_data=report_data)
     
     print("分析完成，结果已保存到目录：")
     print(f"  基础目录: {dirs['base_dir']}")
@@ -500,7 +683,7 @@ def analyze_mutation_distribution(file_path):
     print(f"  3. 建议使用文件名: {dirs['file_name_no_ext']}_report.pdf")
     print(f"  4. 或直接使用命令: start {report_path}")
 
-def generate_html_report(input_file_path, dirs, output_path=None):
+def generate_html_report(input_file_path, dirs, report_data=None, output_path=None):
     """
     生成包含所有分析结果的HTML报告
     
@@ -515,157 +698,195 @@ def generate_html_report(input_file_path, dirs, output_path=None):
     if output_path is None:
         report_filename = f"{dirs['file_name_no_ext']}_report.html"
         output_path = os.path.join(dirs['reports_dir'], report_filename)
-    
-    # 获取输入文件名
+
     file_name = os.path.basename(input_file_path)
-    
-    # HTML头部
-    html = '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>突变分析报告</title>
-        <meta charset="utf-8">
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            h1 { text-align: center; color: #333; }
-            .figure-container { margin: 20px 0; text-align: center; }
-            .figure-container img { max-width: 100%; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-            .figure-title { font-weight: bold; margin: 10px 0; }
-            .section { margin: 30px 0; }
-            table { width: 100%; border-collapse: collapse; }
-            table, th, td { border: 1px solid #ddd; }
-            th, td { padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
-            .report-header { display: flex; justify-content: space-between; margin-bottom: 20px; }
-            .logo { text-align: center; font-size: 24px; font-weight: bold; }
-            .info { font-size: 14px; color: #666; }
-            @media print {
-                .page-break { page-break-before: always; }
-                .no-print { display: none; }
-            }
-            .print-button { 
-                display: inline-block; 
-                padding: 10px 15px; 
-                background: #4CAF50; 
-                color: white; 
-                border-radius: 4px; 
-                cursor: pointer; 
-                margin-bottom: 20px; 
-                font-size: 16px;
-                font-weight: bold;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="report-header">
-                <div class="logo">突变分析报告</div>
-                <div class="info">
-                    分析日期：CURRENT_DATE<br>
-                    分析文件：FILENAME<br>
-                </div>
-            </div>
-            
-            <button class="print-button no-print" onclick="window.print()">打印报告为PDF</button>
-            
-            <div class="section">
-                <h2>1. 总体突变分析</h2>
-                
-                <div class="figure-container">
-                    <img src="../images/mutation_distribution.png" alt="总突变率分布">
-                    <div class="figure-title">图1: 序列位置的总突变率分布</div>
-                </div>
-                
-                <div class="figure-container">
-                    <img src="../images/total_mutation_deletion_rate.png" alt="总突变+缺失率分布">
-                    <div class="figure-title">图2: 序列位置的总突变+缺失率分布</div>
-                </div>
-                
-                <div class="figure-container">
-                    <img src="../images/error_rate_comparison.png" alt="错误率对比">
-                    <div class="figure-title">图3: 不同错误类型在各序列位置的分布对比</div>
-                </div>
-            </div>
-            
-            <div class="section page-break">
-                <h2>2. 目标碱基分析 (toA/T/C/G)</h2>
-                
-                <div class="figure-container">
-                    <img src="../images/base_specific_mutation_rates.png" alt="目标碱基突变率">
-                    <div class="figure-title">图4: 突变至特定碱基的比率分布 (toA/toT/toC/toG)</div>
-                </div>
-            </div>
-            
-            <div class="section page-break">
-                <h2>3. 模板碱基分析 (Ato/Tto/Cto/Gto)</h2>
-                
-                <div class="figure-container">
-                    <img src="../images/template_base_specific_mutation_rates.png" alt="模板碱基突变率">
-                    <div class="figure-title">图5: 不同位置碱基的突变率分布 (Ato/Tto/Cto/Gto)</div>
-                </div>
-            </div>
-            
-            <div class="section page-break">
-                <h2>4. 缺失率分析</h2>
-                
-                <div class="figure-container">
-                    <img src="../images/deletion_rate_distribution.png" alt="总缺失率">
-                    <div class="figure-title">图6: 序列位置的总缺失率分布</div>
-                </div>
-                
-                <div class="figure-container">
-                    <img src="../images/base_specific_deletion_rates.png" alt="碱基特异性缺失率">
-                    <div class="figure-title">图7: 不同碱基位置的缺失率分布</div>
-                </div>
-                
-                <div class="figure-container">
-                    <img src="../images/total_vs_sum_deletion_rates.png" alt="总缺失率对比">
-                    <div class="figure-title">图8: 总缺失率与各碱基缺失率之和的对比</div>
-                </div>
-            </div>
-            
-            <div class="section page-break">
-                <h2>5. 碱基特异性突变与缺失对比</h2>
-                
-                <div class="figure-container">
-                    <img src="../images/base_mut_vs_del_comparison.png" alt="突变与缺失对比">
-                    <div class="figure-title">图9: 各碱基位置的突变与缺失率对比</div>
-                </div>
-            </div>
-            
-            <div class="section">
-                <h2>6. 数据表格</h2>
-                <p>位置突变率数据可在 <a href="../data/position_mutation_rates.csv">position_mutation_rates.csv</a> 文件中找到。</p>
-            </div>
-            
-            <div class="section">
-                <p style="text-align: center; color: #666; font-style: italic;">
-                    此报告由突变分析脚本自动生成
-                </p>
-            </div>
+    today = datetime.datetime.now().strftime('%Y-%m-%d')
+
+    # Optional report data (new global summary + matrices)
+    summary = (report_data or {}).get('summary', {})
+    deletion_by_template = (report_data or {}).get('deletion_by_template', None)
+    sub_counts = (report_data or {}).get('substitution_matrix_counts', None)
+    sub_percent = (report_data or {}).get('substitution_matrix_percent', None)
+
+    def fmt(v, digits=6):
+        try:
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return ''
+            return f"{float(v):.{digits}g}"
+        except Exception:
+            return str(v)
+
+    summary_table = f"""
+        <table>
+          <tr><th>Metric</th><th>Value</th></tr>
+          <tr><td>Total depths</td><td>{fmt(summary.get('total_depths'))}</td></tr>
+          <tr><td>Total substitution muts (sum Muts)</td><td>{fmt(summary.get('total_substitution_muts'))}</td></tr>
+          <tr><td>Total deletions (sum delcount)</td><td>{fmt(summary.get('total_deletions'))}</td></tr>
+          <tr><td>Total substitution rate</td><td>{fmt(summary.get('substitution_total_rate'))}</td></tr>
+          <tr><td>Total deletion rate</td><td>{fmt(summary.get('deletion_total_rate'))}</td></tr>
+          <tr><td>Total error rate (sub+del)</td><td>{fmt(summary.get('total_error_rate'))}</td></tr>
+        </table>
+    """
+
+    del_table_html = ""
+    if isinstance(deletion_by_template, pd.DataFrame):
+        del_df = deletion_by_template.copy()
+        for c in ['delcount', 'Depths', 'DelRate']:
+            if c in del_df.columns:
+                del_df[c] = del_df[c].map(lambda x: '' if pd.isna(x) else f"{float(x):.6g}")
+        del_table_html = del_df.to_html(classes='dataframe', border=0)
+
+    sub_percent_table_html = ""
+    if isinstance(sub_percent, pd.DataFrame):
+        sp = sub_percent.copy()
+        sp = sp.reindex(index=BASES, columns=BASES)
+        for i in BASES:
+            for j in BASES:
+                if i == j:
+                    sp.loc[i, j] = '—'
+                else:
+                    v = sp.loc[i, j]
+                    sp.loc[i, j] = '' if pd.isna(v) else f"{float(v):.1f}%"
+        sub_percent_table_html = sp.to_html(classes='dataframe', border=0, escape=False)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>突变分析报告 / Mutation Report</title>
+  <style>
+    :root {{
+      --text: #1f2328;
+      --muted: #57606a;
+      --border: #d0d7de;
+      --panel: #f6f8fa;
+    }}
+    body {{ font-family: Arial, sans-serif; margin: 18px; color: var(--text); }}
+    .container {{ max-width: 1200px; margin: 0 auto; }}
+    .header {{ display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }}
+    .title {{ font-size: 22px; font-weight: 700; }}
+    .meta {{ font-size: 13px; color: var(--muted); line-height: 1.4; }}
+    .toolbar {{ margin: 14px 0 6px; }}
+    .print-button {{
+      display: inline-block; padding: 10px 14px; background: #2da44e; color: white;
+      border-radius: 6px; border: none; cursor: pointer; font-weight: 700;
+    }}
+    .section {{ margin: 22px 0; padding: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }}
+    .section h2 {{ margin: 0 0 10px; font-size: 18px; }}
+    details {{ margin: 12px 0; background: white; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }}
+    summary {{
+      list-style: none;
+      cursor: pointer;
+      padding: 10px 12px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #fff8c5, #ffffff);
+      border-bottom: 1px solid var(--border);
+    }}
+    summary::-webkit-details-marker {{ display: none; }}
+    .details-body {{ padding: 12px; }}
+    .figure {{ margin: 10px 0 2px; text-align: center; }}
+    .figure img {{ max-width: 100%; border: 1px solid var(--border); border-radius: 10px; background: white; }}
+    .caption {{ margin-top: 8px; font-size: 13px; color: var(--muted); }}
+    table {{ width: 100%; border-collapse: collapse; background: white; }}
+    th, td {{ border: 1px solid var(--border); padding: 8px 10px; font-size: 13px; }}
+    th {{ background: #fff8c5; text-align: left; }}
+    a {{ color: #0969da; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    @media print {{
+      .no-print {{ display: none; }}
+      .section {{ break-inside: avoid; }}
+      body {{ margin: 0; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="title">突变分析报告 / Mutation Report</div>
+      <div class="meta">
+        Date: {today}<br>
+        Input: {file_name}
+      </div>
+    </div>
+
+    <div class="toolbar no-print">
+      <button class="print-button" onclick="window.print()">Print to PDF</button>
+    </div>
+
+    <div class="section">
+      <h2>1) Global Summary (weighted by depths)</h2>
+      {summary_table}
+      <p class="caption">
+        CSV: <a href="../data/global_summary.csv">global_summary.csv</a>,
+        <a href="../data/deletion_rate_by_template.csv">deletion_rate_by_template.csv</a>
+      </p>
+    </div>
+
+    <details open>
+      <summary>2) Global Substitution Spectrum</summary>
+      <div class="details-body">
+        <div class="figure">
+          <img src="../images/substitution_matrix_heatmap.png" alt="substitution matrix heatmap">
+          <div class="caption">Off-diagonal cells sum to 100%. Diagonal is not applicable.</div>
         </div>
-        
-        <script>
-            document.querySelector('.print-button').addEventListener('click', function() {
-                window.print();
-            });
-        </script>
-    </body>
-    </html>
-    '''
-    
-    # 替换特定标记
-    html = html.replace('CURRENT_DATE', datetime.datetime.now().strftime('%Y-%m-%d'))
-    html = html.replace('FILENAME', file_name)
-    
-    # 写入HTML文件
+        {sub_percent_table_html}
+        <p class="caption">
+          CSV: <a href="../data/substitution_matrix_counts.csv">substitution_matrix_counts.csv</a>,
+          <a href="../data/substitution_matrix_percent.csv">substitution_matrix_percent.csv</a>
+        </p>
+      </div>
+    </details>
+
+    <details open>
+      <summary>3) Global Deletion (by template base)</summary>
+      <div class="details-body">
+        <div class="figure">
+          <img src="../images/deletion_rate_by_template_bar.png" alt="deletion rate by template base">
+        </div>
+        {del_table_html}
+      </div>
+    </details>
+
+    <details open>
+      <summary>4) Per-position Deletion by Template Base (no length normalization)</summary>
+      <div class="details-body">
+        <div class="figure">
+          <img src="../images/position_base_specific_deletion_rates.png" alt="per-position base-specific deletion rates">
+          <div class="caption">Each line is a weighted deletion rate among sites where Template==A/T/C/G at that Pos.</div>
+        </div>
+        <p class="caption">CSV: <a href="../data/position_base_specific_deletion_rates.csv">position_base_specific_deletion_rates.csv</a></p>
+      </div>
+    </details>
+
+    <details>
+      <summary>5) Additional Position-wise Plots (legacy)</summary>
+      <div class="details-body">
+        <div class="figure">
+          <img src="../images/mutation_distribution.png" alt="mutation distribution">
+          <div class="caption">Average mutation rate by Pos.</div>
+        </div>
+        <div class="figure">
+          <img src="../images/base_specific_mutation_rates.png" alt="to-base mutation rates">
+        </div>
+        <div class="figure">
+          <img src="../images/template_base_specific_mutation_rates.png" alt="from-base mutation rates">
+        </div>
+        <div class="figure">
+          <img src="../images/deletion_rate_distribution.png" alt="deletion distribution">
+        </div>
+        <p class="caption">CSV: <a href="../data/position_mutation_rates.csv">position_mutation_rates.csv</a></p>
+      </div>
+    </details>
+
+    <p class="caption" style="text-align:center;">Generated by MutationsCounter</p>
+  </div>
+</body>
+</html>
+"""
+
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html)
-    
-    # 不自动打开HTML报告，只返回路径
-    
+
     return output_path
 
 def open_html_in_browser(html_path):
@@ -712,12 +933,18 @@ def batch_process_files(folder_path):
     Returns:
     Number of files processed
     """
-    # Find all matching files
-    pattern = os.path.join(folder_path, "*.mpileup.cns.filter.xls")
-    files = glob.glob(pattern)
+    # Find all matching files (support a few common naming variants)
+    patterns = [
+        os.path.join(folder_path, "*.mpileup.cns.filter.xls"),
+        os.path.join(folder_path, "*.mpileup*.cns*.xls"),
+    ]
+    files = []
+    for p in patterns:
+        files.extend(glob.glob(p))
+    files = sorted(set(files))
     
     if not files:
-        print(f"ERROR: No .mpileup.cns.filter.xls files found in folder {folder_path}")
+        print(f"ERROR: No mpileup CNS .xls files found in folder {folder_path}")
         return 0
     
     print(f"Found {len(files)} files to process...")

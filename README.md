@@ -4,6 +4,9 @@
 
 ## 功能一览
 - 统计总突变率、目标碱基突变率（toA/toT/toC/toG）、缺失率等指标
+- 统计整体 substitution 突变谱（Template->Alt 的 4x4 matrix，off-diagonal 总和为 100%）并注明总 substitution 突变率
+- 统计整体 deletion（总 deletion 率 + A/T/C/G 各自的 deletion 率）
+- 输出每个 position 上、按 Template=A/T/C/G 分组的 deletion 率（不做长度归一化）
 - 按序列长度归一化到 1-100 的位置区间，便于跨序列比较
 - 生成多张 PNG 图表与 CSV 统计文件
 - 自动生成 HTML 报告（可在浏览器中打印为 PDF）
@@ -22,6 +25,10 @@ pip install pandas numpy matplotlib
 
 ## 输入文件格式
 脚本读取的是“制表符分隔”的文本文件（扩展名为 `.xls`，但**不是** Excel 二进制格式）。
+
+文件名后缀历史上常见两类，脚本批处理会同时兼容：
+- `*.mpileup.cns.filter.xls`
+- `*.mpileup*.cns*.xls`（例如 `*.mpileup.1Dseq.cns.xls`）
 
 必须至少包含以下列（区分大小写）：
 

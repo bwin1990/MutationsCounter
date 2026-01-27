@@ -20,8 +20,8 @@ if not exist "%~dp0analyze_mutations.py" (
 )
 
 echo Please select operation mode:
-echo 1. Select a folder (process all .mpileup.cns.filter.xls files in the folder)
-echo 2. Process all .mpileup.cns.filter.xls files in the current directory
+echo 1. Select a folder (process all mpileup CNS *.xls files in the folder)
+echo 2. Process all mpileup CNS *.xls files in the current directory
 echo 3. Specify a single file to process
 echo.
 
@@ -34,22 +34,22 @@ if "%choice%"=="1" (
 )
 
 if "%choice%"=="2" (
-    echo Processing all .mpileup.cns.filter.xls files in the current directory...
+    echo Processing all mpileup CNS *.xls files in the current directory...
     
     set file_count=0
-    for %%f in (*.mpileup.cns.filter.xls) do (
+    for %%f in (*.mpileup*.cns*.xls) do (
         set /a file_count+=1
     )
     
     if !file_count! equ 0 (
-        echo ERROR: No .mpileup.cns.filter.xls files found in the current directory.
+        echo ERROR: No mpileup CNS *.xls files found in the current directory.
         goto :end
     )
     
     echo Found !file_count! files to process...
     
     set current=0
-    for %%f in (*.mpileup.cns.filter.xls) do (
+    for %%f in (*.mpileup*.cns*.xls) do (
         set /a current+=1
         echo.
         echo [!current!/!file_count!] Processing: %%f

@@ -29,9 +29,9 @@ def main():
         print(f"ERROR: File {file_path} does not exist")
         return
     
-    # Check if file has the correct format
-    if '.mpileup.cns' not in file_path:
-        print(f"WARNING: File {file_path} does not contain '.mpileup.cns' in the filename")
+    # Check if file has the expected naming pattern (allow common variants like ".mpileup.1Dseq.cns")
+    if '.mpileup' not in file_path or '.cns' not in file_path:
+        print(f"WARNING: File {file_path} does not look like an mpileup CNS result filename")
         response = input("Continue processing? (y/n): ")
         if response.lower() != 'y':
             return
