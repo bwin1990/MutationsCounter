@@ -1,3 +1,4 @@
+import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -964,12 +965,14 @@ if __name__ == "__main__":
     print("Mutation Analysis Tool - Batch Processing Mode")
     print("Please select a folder containing .mpileup.cns.filter.xls files...")
     
-    # Let user select a folder
-    folder_path = select_folder()
-    
-    if folder_path:
+    # Accept folder path from CLI or let user select a folder
+    folder_path = sys.argv[1] if len(sys.argv) > 1 else None
+    if not folder_path:
+        folder_path = select_folder()
+
+    if folder_path and os.path.isdir(folder_path):
         print(f"Selected folder: {folder_path}")
         # Batch process files
         batch_process_files(folder_path)
     else:
-        print("User canceled operation or no folder was selected")
+        print("User canceled operation or no valid folder was selected")

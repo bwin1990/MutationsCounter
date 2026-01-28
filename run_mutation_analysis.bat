@@ -1,15 +1,37 @@
 @echo off
 setlocal enabledelayedexpansion
 
+set "ENV_NAME=bio-work"
+
 echo ===================================================
 echo         Mutation Analysis Tool - Batch Processing
 echo ===================================================
 echo.
 
-REM Check if Python is installed
+REM Activate conda environment
+set "CONDA_BAT="
+for /f "usebackq delims=" %%i in (`where conda.bat 2^>nul`) do (
+    set "CONDA_BAT=%%i"
+    goto :conda_found
+)
+
+:conda_found
+if not defined CONDA_BAT (
+    echo ERROR: conda.bat not found. Please ensure Conda is installed and added to PATH.
+    goto :end
+)
+
+call "%CONDA_BAT%" activate %ENV_NAME% >nul 2>&1
+if %errorlevel% neq 0 (
+    echo ERROR: Failed to activate Conda environment "%ENV_NAME%".
+    echo Please verify the environment exists: conda env list
+    goto :end
+)
+
+REM Check if Python is available in the activated environment
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
-    echo ERROR: Python not found. Please make sure Python is installed and added to PATH.
+    echo ERROR: Python not found in Conda environment "%ENV_NAME%".
     goto :end
 )
 
@@ -28,8 +50,15 @@ echo.
 set /p choice="Enter your choice (1/2/3): "
 
 if "%choice%"=="1" (
-    echo Starting folder selection mode...
-    python "%~dp0analyze_mutations.py"
+    echo Opening folder picker...
+    for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select folder containing mpileup CNS .xls files'; if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }"`) do set "folder_path=%%i"
+
+    if not defined folder_path (
+        echo No folder selected. Operation canceled.
+        goto :end
+    )
+
+    python "%~dp0analyze_mutations.py" "!folder_path!"
     goto :end
 )
 
@@ -62,11 +91,11 @@ if "%choice%"=="2" (
 )
 
 if "%choice%"=="3" (
-    echo Please drag and drop the .mpileup.cns.filter.xls file into this window, then press Enter:
-    set /p file_path=
+    echo Opening file picker...
+    for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'mpileup CNS files (*.mpileup*.cns*.xls)|*.mpileup*.cns*.xls|All files (*.*)|*.*'; $f.Multiselect = $false; if ($f.ShowDialog() -eq 'OK') { $f.FileName }"`) do set "file_path=%%i"
     
-    if not exist "!file_path!" (
-        echo ERROR: File does not exist.
+    if not defined file_path (
+        echo No file selected. Operation canceled.
         goto :end
     )
     
