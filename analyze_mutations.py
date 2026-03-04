@@ -29,21 +29,25 @@ def _safe_divide(num, den):
 
 def compute_global_summary(df):
     """
-    Compute weighted (sum-based) global substitution/deletion rates and deletion-by-template.
+    Compute weighted (sum-based) global substitution/deletion/insertion rates and by-template breakdowns.
     """
     _require_columns(df, ['Depths', 'Muts', 'delcount', 'Template'])
+    has_ins = 'inscount' in df.columns
 
     total_depths = float(df['Depths'].sum())
     total_muts = float(df['Muts'].sum())
     total_del = float(df['delcount'].sum())
+    total_ins = float(df['inscount'].sum()) if has_ins else 0.0
 
     summary = {
         'total_depths': total_depths,
         'total_substitution_muts': total_muts,
         'total_deletions': total_del,
+        'total_insertions': total_ins,
         'substitution_total_rate': _safe_divide(total_muts, total_depths),
         'deletion_total_rate': _safe_divide(total_del, total_depths),
-        'total_error_rate': _safe_divide(total_muts + total_del, total_depths),
+        'insertion_total_rate': _safe_divide(total_ins, total_depths),
+        'total_error_rate': _safe_divide(total_muts + total_del + total_ins, total_depths),
     }
 
     del_by_template = (
@@ -54,7 +58,18 @@ def compute_global_summary(df):
     del_by_template['DelRate'] = del_by_template['delcount'] / del_by_template['Depths']
     del_by_template.index.name = 'Template'
 
-    return summary, del_by_template
+    if has_ins:
+        ins_by_template = (
+            df.groupby('Template')[['inscount', 'Depths']]
+              .sum()
+              .reindex(BASES)
+        )
+        ins_by_template['InsRate'] = ins_by_template['inscount'] / ins_by_template['Depths']
+        ins_by_template.index.name = 'Template'
+    else:
+        ins_by_template = None
+
+    return summary, del_by_template, ins_by_template
 
 def compute_substitution_matrix(df):
     """
@@ -88,6 +103,19 @@ def compute_position_base_specific_deletion(df):
     grouped = df.groupby(['Pos', 'Template'])[['delcount', 'Depths']].sum()
     grouped['DelRate'] = grouped['delcount'] / grouped['Depths']
     rates = grouped['DelRate'].unstack('Template').reindex(columns=BASES)
+    rates.index.name = 'Pos'
+    return rates
+
+def compute_position_base_specific_insertion(df):
+    """
+    For each Pos, compute weighted insertion rate by template base (A/T/C/G).
+    """
+    if 'inscount' not in df.columns:
+        return None
+    _require_columns(df, ['Pos', 'Template', 'inscount', 'Depths'])
+    grouped = df.groupby(['Pos', 'Template'])[['inscount', 'Depths']].sum()
+    grouped['InsRate'] = grouped['inscount'] / grouped['Depths']
+    rates = grouped['InsRate'].unstack('Template').reindex(columns=BASES)
     rates.index.name = 'Pos'
     return rates
 
@@ -144,6 +172,22 @@ def plot_deletion_by_template_bar(del_by_template, summary, out_path):
     plt.savefig(out_path, dpi=200)
     plt.close()
 
+def plot_insertion_by_template_bar(ins_by_template, summary, out_path):
+    plt.figure(figsize=(7, 5))
+    rates = ins_by_template['InsRate'].reindex(BASES)
+    plt.bar(BASES, rates.values, color=['#4C78A8', '#F58518', '#54A24B', '#E45756'])
+    plt.xlabel('Template base')
+    plt.ylabel('Insertion rate (weighted)')
+    ins_rate = summary.get('insertion_total_rate', np.nan)
+    plt.title(f"Insertion Rate by Template Base (Total insertion rate: {ins_rate:.6g})")
+    for i, v in enumerate(rates.values):
+        if pd.isna(v):
+            continue
+        plt.text(i, v, f"{v:.2e}", ha='center', va='bottom', fontsize=9)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
 def plot_position_base_specific_deletion_lines(pos_base_del_rates, out_path):
     plt.figure(figsize=(15, 6))
     x = pos_base_del_rates.index.values
@@ -155,6 +199,23 @@ def plot_position_base_specific_deletion_lines(pos_base_del_rates, out_path):
     plt.xlabel('Position (Pos)')
     plt.ylabel('Deletion rate (weighted)')
     plt.title('Per-position Deletion Rate by Template Base')
+    plt.grid(True, linestyle='--', alpha=0.4)
+    plt.legend(ncol=4, fontsize=9)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=200)
+    plt.close()
+
+def plot_position_base_specific_insertion_lines(pos_base_ins_rates, out_path):
+    plt.figure(figsize=(15, 6))
+    x = pos_base_ins_rates.index.values
+    colors = {'A': '#4C78A8', 'T': '#F58518', 'C': '#54A24B', 'G': '#E45756'}
+    for b in BASES:
+        if b not in pos_base_ins_rates.columns:
+            continue
+        plt.plot(x, pos_base_ins_rates[b].values, label=f'{b} insertion rate', linewidth=1.2, color=colors.get(b))
+    plt.xlabel('Position (Pos)')
+    plt.ylabel('Insertion rate (weighted)')
+    plt.title('Per-position Insertion Rate by Template Base')
     plt.grid(True, linestyle='--', alpha=0.4)
     plt.legend(ncol=4, fontsize=9)
     plt.tight_layout()
@@ -221,27 +282,34 @@ def analyze_mutation_distribution(file_path):
     print(f"序列数量: {df['Chrom'].nunique()}")
     
     # 确保'Pos'和'Muts'列是数值型
-    for col in ['Pos', 'Muts', 'Depths', 'delcount', 'Acount', 'Tcount', 'Ccount', 'Gcount']:
+    for col in ['Pos', 'Muts', 'Depths', 'delcount', 'inscount', 'Acount', 'Tcount', 'Ccount', 'Gcount']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    has_ins = 'inscount' in df.columns
     
     # 计算每个序列的长度
     sequence_lengths = df.groupby('Chrom')['Pos'].max().to_dict()
     print(f"序列长度范围: {min(sequence_lengths.values())} - {max(sequence_lengths.values())}")
 
-    # ===== New: Global summary + substitution matrix + per-position base-specific deletions =====
-    summary, deletion_by_template = compute_global_summary(df)
+    # ===== Global summary + substitution matrix + per-position base-specific deletions/insertions =====
+    summary, deletion_by_template, insertion_by_template = compute_global_summary(df)
     sub_counts, sub_percent, total_sub_counts = compute_substitution_matrix(df)
     pos_base_del_rates = compute_position_base_specific_deletion(df)
+    pos_base_ins_rates = compute_position_base_specific_insertion(df)
 
-    # Save new CSV outputs
+    # Save CSV outputs
     pd.DataFrame([summary]).to_csv(os.path.join(dirs['data_dir'], 'global_summary.csv'), index=False)
     deletion_by_template.to_csv(os.path.join(dirs['data_dir'], 'deletion_rate_by_template.csv'))
     sub_counts.to_csv(os.path.join(dirs['data_dir'], 'substitution_matrix_counts.csv'))
     sub_percent.to_csv(os.path.join(dirs['data_dir'], 'substitution_matrix_percent.csv'))
     pos_base_del_rates.to_csv(os.path.join(dirs['data_dir'], 'position_base_specific_deletion_rates.csv'))
+    if insertion_by_template is not None:
+        insertion_by_template.to_csv(os.path.join(dirs['data_dir'], 'insertion_rate_by_template.csv'))
+    if pos_base_ins_rates is not None:
+        pos_base_ins_rates.to_csv(os.path.join(dirs['data_dir'], 'position_base_specific_insertion_rates.csv'))
 
-    # New visualizations
+    # Visualizations
     plot_substitution_matrix_heatmap(
         sub_percent,
         summary,
@@ -256,6 +324,17 @@ def analyze_mutation_distribution(file_path):
         pos_base_del_rates,
         os.path.join(dirs['images_dir'], 'position_base_specific_deletion_rates.png'),
     )
+    if insertion_by_template is not None:
+        plot_insertion_by_template_bar(
+            insertion_by_template,
+            summary,
+            os.path.join(dirs['images_dir'], 'insertion_rate_by_template_bar.png'),
+        )
+    if pos_base_ins_rates is not None:
+        plot_position_base_specific_insertion_lines(
+            pos_base_ins_rates,
+            os.path.join(dirs['images_dir'], 'position_base_specific_insertion_rates.png'),
+        )
     
     # 计算各种突变率
     df['MutationRate'] = df['Muts'] / df['Depths']  # 总突变率
@@ -264,7 +343,11 @@ def analyze_mutation_distribution(file_path):
     df['CRate'] = df['Ccount'] / df['Depths']  # toC突变率 (突变为C的比例)
     df['GRate'] = df['Gcount'] / df['Depths']  # toG突变率 (突变为G的比例)
     df['DelRate'] = df['delcount'] / df['Depths']  # 总缺失率
-    df['TotalMutDelRate'] = (df['Muts'] + df['delcount']) / df['Depths']  # 总突变+缺失率
+    if has_ins:
+        df['InsRate'] = df['inscount'] / df['Depths']  # 总插入率
+    else:
+        df['InsRate'] = 0
+    df['TotalErrorRate'] = (df['Muts'] + df['delcount'] + (df['inscount'] if has_ins else 0)) / df['Depths']  # 总错误率
     
     # 1. 按模板碱基(Template)分类的缺失率
     # 创建各碱基的缺失数据框
@@ -284,6 +367,17 @@ def analyze_mutation_distribution(file_path):
     df.loc[df['Template'] == 'T', 'T_DelRate'] = df_T_del['delcount'] / df_T_del['Depths']
     df.loc[df['Template'] == 'C', 'C_DelRate'] = df_C_del['delcount'] / df_C_del['Depths']
     df.loc[df['Template'] == 'G', 'G_DelRate'] = df_G_del['delcount'] / df_G_del['Depths']
+    
+    # 1.1 按模板碱基(Template)分类的插入率
+    df['A_InsRate'] = 0
+    df['T_InsRate'] = 0
+    df['C_InsRate'] = 0
+    df['G_InsRate'] = 0
+    if has_ins:
+        df.loc[df['Template'] == 'A', 'A_InsRate'] = df[df['Template'] == 'A']['inscount'] / df[df['Template'] == 'A']['Depths']
+        df.loc[df['Template'] == 'T', 'T_InsRate'] = df[df['Template'] == 'T']['inscount'] / df[df['Template'] == 'T']['Depths']
+        df.loc[df['Template'] == 'C', 'C_InsRate'] = df[df['Template'] == 'C']['inscount'] / df[df['Template'] == 'C']['Depths']
+        df.loc[df['Template'] == 'G', 'G_InsRate'] = df[df['Template'] == 'G']['inscount'] / df[df['Template'] == 'G']['Depths']
     
     # 2. 按模板碱基(Template)分类的突变率
     # 创建各碱基的突变数据框
@@ -305,23 +399,29 @@ def analyze_mutation_distribution(file_path):
     df.loc[df['Template'] == 'G', 'Gto_MutRate'] = df_G_mut['Muts'] / df_G_mut['Depths']
     
     # 按位置统计所有序列的各种平均突变率
-    position_rates = df.groupby('Pos').agg({
+    agg_dict = {
         'MutationRate': 'mean',
         'ARate': 'mean',
         'TRate': 'mean',
         'CRate': 'mean',
         'GRate': 'mean',
         'DelRate': 'mean',
-        'TotalMutDelRate': 'mean',
+        'InsRate': 'mean',
+        'TotalErrorRate': 'mean',
         'A_DelRate': 'mean',
         'T_DelRate': 'mean',
         'C_DelRate': 'mean',
         'G_DelRate': 'mean',
+        'A_InsRate': 'mean',
+        'T_InsRate': 'mean',
+        'C_InsRate': 'mean',
+        'G_InsRate': 'mean',
         'Ato_MutRate': 'mean',
         'Tto_MutRate': 'mean',
         'Cto_MutRate': 'mean',
         'Gto_MutRate': 'mean'
-    })
+    }
+    position_rates = df.groupby('Pos').agg(agg_dict)
     
     # 保存按位置的突变率统计结果
     position_rates.to_csv(os.path.join(dirs['data_dir'], 'position_mutation_rates.csv'))
@@ -388,7 +488,6 @@ def analyze_mutation_distribution(file_path):
     plt.close()
     
     # 3.2 对比总缺失率和各碱基缺失率相加
-    # 计算各碱基缺失率之和，应该等于总缺失率
     position_rates['Sum_Base_DelRate'] = position_rates['A_DelRate'] + position_rates['T_DelRate'] + \
                                        position_rates['C_DelRate'] + position_rates['G_DelRate']
     
@@ -403,66 +502,100 @@ def analyze_mutation_distribution(file_path):
     plt.savefig(os.path.join(dirs['images_dir'], 'total_vs_sum_deletion_rates.png'))
     plt.close()
     
-    # 3.3 模板碱基突变率与缺失率的对比
+    # 3.4 总插入率分布图
+    if has_ins:
+        plt.figure(figsize=(15, 6))
+        plt.bar(position_rates.index, position_rates['InsRate'])
+        plt.xlabel('序列位置')
+        plt.ylabel('平均总插入率')
+        plt.title('总插入率在不同序列位置的分布')
+        plt.savefig(os.path.join(dirs['images_dir'], 'insertion_rate_distribution.png'))
+        plt.close()
+        
+        # 3.5 按碱基分类的插入率分布图
+        plt.figure(figsize=(15, 8))
+        plt.plot(position_rates.index, position_rates['A_InsRate'], 'r-', label='A位置插入率')
+        plt.plot(position_rates.index, position_rates['T_InsRate'], 'g-', label='T位置插入率')
+        plt.plot(position_rates.index, position_rates['C_InsRate'], 'b-', label='C位置插入率')
+        plt.plot(position_rates.index, position_rates['G_InsRate'], 'y-', label='G位置插入率')
+        plt.xlabel('序列位置')
+        plt.ylabel('碱基特异性插入率')
+        plt.title('不同碱基位置的插入率')
+        plt.legend()
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.savefig(os.path.join(dirs['images_dir'], 'base_specific_insertion_rates.png'))
+        plt.close()
+    
+    # 3.3 模板碱基突变率与缺失率与插入率的对比
     plt.figure(figsize=(15, 12))
-    # A的突变与缺失
+    # A的突变、缺失与插入
     plt.subplot(2, 2, 1)
     plt.plot(position_rates.index, position_rates['Ato_MutRate'], 'r-', label='A位置突变率')
     plt.plot(position_rates.index, position_rates['A_DelRate'], 'r--', label='A位置缺失率')
+    if has_ins:
+        plt.plot(position_rates.index, position_rates['A_InsRate'], 'r:', label='A位置插入率')
     plt.xlabel('序列位置')
     plt.ylabel('错误率')
-    plt.title('A位置的突变与缺失对比')
+    plt.title('A位置的突变、缺失与插入对比')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
-    # T的突变与缺失
+    # T的突变、缺失与插入
     plt.subplot(2, 2, 2)
     plt.plot(position_rates.index, position_rates['Tto_MutRate'], 'g-', label='T位置突变率')
     plt.plot(position_rates.index, position_rates['T_DelRate'], 'g--', label='T位置缺失率')
+    if has_ins:
+        plt.plot(position_rates.index, position_rates['T_InsRate'], 'g:', label='T位置插入率')
     plt.xlabel('序列位置')
     plt.ylabel('错误率')
-    plt.title('T位置的突变与缺失对比')
+    plt.title('T位置的突变、缺失与插入对比')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
-    # C的突变与缺失
+    # C的突变、缺失与插入
     plt.subplot(2, 2, 3)
     plt.plot(position_rates.index, position_rates['Cto_MutRate'], 'b-', label='C位置突变率')
     plt.plot(position_rates.index, position_rates['C_DelRate'], 'b--', label='C位置缺失率')
+    if has_ins:
+        plt.plot(position_rates.index, position_rates['C_InsRate'], 'b:', label='C位置插入率')
     plt.xlabel('序列位置')
     plt.ylabel('错误率')
-    plt.title('C位置的突变与缺失对比')
+    plt.title('C位置的突变、缺失与插入对比')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
-    # G的突变与缺失
+    # G的突变、缺失与插入
     plt.subplot(2, 2, 4)
     plt.plot(position_rates.index, position_rates['Gto_MutRate'], 'y-', label='G位置突变率')
     plt.plot(position_rates.index, position_rates['G_DelRate'], 'y--', label='G位置缺失率')
+    if has_ins:
+        plt.plot(position_rates.index, position_rates['G_InsRate'], 'y:', label='G位置插入率')
     plt.xlabel('序列位置')
     plt.ylabel('错误率')
-    plt.title('G位置的突变与缺失对比')
+    plt.title('G位置的突变、缺失与插入对比')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig(os.path.join(dirs['images_dir'], 'base_mut_vs_del_comparison.png'))
+    plt.savefig(os.path.join(dirs['images_dir'], 'base_mut_vs_del_ins_comparison.png'))
     plt.close()
     
-    # 4. 突变+缺失总率分布图
+    # 4. 总错误率分布图
     plt.figure(figsize=(15, 6))
-    plt.bar(position_rates.index, position_rates['TotalMutDelRate'])
+    plt.bar(position_rates.index, position_rates['TotalErrorRate'])
     plt.xlabel('序列位置')
-    plt.ylabel('突变+缺失总率')
-    plt.title('突变+缺失总率在不同序列位置的分布')
-    plt.savefig(os.path.join(dirs['images_dir'], 'total_mutation_deletion_rate.png'))
+    plt.ylabel('总错误率(突变+缺失+插入)')
+    plt.title('总错误率(突变+缺失+插入)在不同序列位置的分布')
+    plt.savefig(os.path.join(dirs['images_dir'], 'total_error_rate.png'))
     plt.close()
     
     # 5. 组合对比图
     plt.figure(figsize=(15, 8))
     plt.plot(position_rates.index, position_rates['MutationRate'], 'b-', label='总突变率(ATCG)')
     plt.plot(position_rates.index, position_rates['DelRate'], 'r-', label='缺失率')
-    plt.plot(position_rates.index, position_rates['TotalMutDelRate'], 'g-', label='突变+缺失总率')
+    if has_ins:
+        plt.plot(position_rates.index, position_rates['InsRate'], 'm-', label='插入率')
+    plt.plot(position_rates.index, position_rates['TotalErrorRate'], 'g-', label='总错误率(突变+缺失+插入)')
     plt.xlabel('序列位置')
     plt.ylabel('错误率')
     plt.title('不同错误类型在各序列位置的分布对比')
@@ -665,6 +798,7 @@ def analyze_mutation_distribution(file_path):
     report_data = {
         'summary': summary,
         'deletion_by_template': deletion_by_template,
+        'insertion_by_template': insertion_by_template,
         'substitution_matrix_counts': sub_counts,
         'substitution_matrix_percent': sub_percent,
     }
@@ -703,9 +837,10 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
     file_name = os.path.basename(input_file_path)
     today = datetime.datetime.now().strftime('%Y-%m-%d')
 
-    # Optional report data (new global summary + matrices)
+    # Optional report data (global summary + matrices + insertion)
     summary = (report_data or {}).get('summary', {})
     deletion_by_template = (report_data or {}).get('deletion_by_template', None)
+    insertion_by_template = (report_data or {}).get('insertion_by_template', None)
     sub_counts = (report_data or {}).get('substitution_matrix_counts', None)
     sub_percent = (report_data or {}).get('substitution_matrix_percent', None)
 
@@ -723,9 +858,11 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
           <tr><td>Total depths</td><td>{fmt(summary.get('total_depths'))}</td></tr>
           <tr><td>Total substitution muts (sum Muts)</td><td>{fmt(summary.get('total_substitution_muts'))}</td></tr>
           <tr><td>Total deletions (sum delcount)</td><td>{fmt(summary.get('total_deletions'))}</td></tr>
+          <tr><td>Total insertions (sum inscount)</td><td>{fmt(summary.get('total_insertions'))}</td></tr>
           <tr><td>Total substitution rate</td><td>{fmt(summary.get('substitution_total_rate'))}</td></tr>
           <tr><td>Total deletion rate</td><td>{fmt(summary.get('deletion_total_rate'))}</td></tr>
-          <tr><td>Total error rate (sub+del)</td><td>{fmt(summary.get('total_error_rate'))}</td></tr>
+          <tr><td>Total insertion rate</td><td>{fmt(summary.get('insertion_total_rate'))}</td></tr>
+          <tr><td>Total error rate (sub+del+ins)</td><td>{fmt(summary.get('total_error_rate'))}</td></tr>
         </table>
     """
 
@@ -749,6 +886,14 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
                     v = sp.loc[i, j]
                     sp.loc[i, j] = '' if pd.isna(v) else f"{float(v):.1f}%"
         sub_percent_table_html = sp.to_html(classes='dataframe', border=0, escape=False)
+
+    ins_table_html = ""
+    if isinstance(insertion_by_template, pd.DataFrame):
+        ins_df = insertion_by_template.copy()
+        for c in ['inscount', 'Depths', 'InsRate']:
+            if c in ins_df.columns:
+                ins_df[c] = ins_df[c].map(lambda x: '' if pd.isna(x) else f"{float(x):.6g}")
+        ins_table_html = ins_df.to_html(classes='dataframe', border=0)
 
     html = f"""<!DOCTYPE html>
 <html>
@@ -819,7 +964,8 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
       {summary_table}
       <p class="caption">
         CSV: <a href="../data/global_summary.csv">global_summary.csv</a>,
-        <a href="../data/deletion_rate_by_template.csv">deletion_rate_by_template.csv</a>
+        <a href="../data/deletion_rate_by_template.csv">deletion_rate_by_template.csv</a>,
+        <a href="../data/insertion_rate_by_template.csv">insertion_rate_by_template.csv</a>
       </p>
     </div>
 
@@ -849,7 +995,17 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
     </details>
 
     <details open>
-      <summary>4) Per-position Deletion by Template Base (no length normalization)</summary>
+      <summary>4.5) Global Insertion (by template base)</summary>
+      <div class="details-body">
+        <div class="figure">
+          <img src="../images/insertion_rate_by_template_bar.png" alt="insertion rate by template base">
+        </div>
+        {ins_table_html}
+      </div>
+    </details>
+
+    <details open>
+      <summary>5) Per-position Deletion by Template Base (no length normalization)</summary>
       <div class="details-body">
         <div class="figure">
           <img src="../images/position_base_specific_deletion_rates.png" alt="per-position base-specific deletion rates">
@@ -859,8 +1015,19 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
       </div>
     </details>
 
+    <details open>
+      <summary>5.5) Per-position Insertion by Template Base (no length normalization)</summary>
+      <div class="details-body">
+        <div class="figure">
+          <img src="../images/position_base_specific_insertion_rates.png" alt="per-position base-specific insertion rates">
+          <div class="caption">Each line is a weighted insertion rate among sites where Template==A/T/C/G at that Pos.</div>
+        </div>
+        <p class="caption">CSV: <a href="../data/position_base_specific_insertion_rates.csv">position_base_specific_insertion_rates.csv</a></p>
+      </div>
+    </details>
+
     <details>
-      <summary>5) Additional Position-wise Plots (legacy)</summary>
+      <summary>6) Additional Position-wise Plots (legacy)</summary>
       <div class="details-body">
         <div class="figure">
           <img src="../images/mutation_distribution.png" alt="mutation distribution">
@@ -874,6 +1041,16 @@ def generate_html_report(input_file_path, dirs, report_data=None, output_path=No
         </div>
         <div class="figure">
           <img src="../images/deletion_rate_distribution.png" alt="deletion distribution">
+        </div>
+        <div class="figure">
+          <img src="../images/insertion_rate_distribution.png" alt="insertion distribution">
+        </div>
+        <div class="figure">
+          <img src="../images/base_specific_insertion_rates.png" alt="base-specific insertion rates">
+        </div>
+        <div class="figure">
+          <img src="../images/error_rate_comparison.png" alt="error rate comparison">
+          <div class="caption">Substitution vs. Deletion vs. Insertion vs. Total Error Rate by Pos.</div>
         </div>
         <p class="caption">CSV: <a href="../data/position_mutation_rates.csv">position_mutation_rates.csv</a></p>
       </div>

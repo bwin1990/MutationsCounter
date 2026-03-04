@@ -3,10 +3,11 @@
 用于对 mpileup 结果（`.mpileup.cns.filter.xls`，制表符分隔）进行突变/缺失统计、位置归一化分析并生成图表与 HTML 报告的脚本集合。
 
 ## 功能一览
-- 统计总突变率、目标碱基突变率（toA/toT/toC/toG）、缺失率等指标
+- 统计总突变率、目标碱基突变率（toA/toT/toC/toG）、缺失率、插入率等指标
 - 统计整体 substitution 突变谱（Template->Alt 的 4x4 matrix，off-diagonal 总和为 100%）并注明总 substitution 突变率
 - 统计整体 deletion（总 deletion 率 + A/T/C/G 各自的 deletion 率）
-- 输出每个 position 上、按 Template=A/T/C/G 分组的 deletion 率（不做长度归一化）
+- 统计整体 insertion（总 insertion 率 + A/T/C/G 各自的 insertion 率）
+- 输出每个 position 上、按 Template=A/T/C/G 分组的 deletion 率和 insertion 率（不做长度归一化）
 - 按序列长度归一化到 1-100 的位置区间，便于跨序列比较
 - 生成多张 PNG 图表与 CSV 统计文件
 - 自动生成 HTML 报告（可在浏览器中打印为 PDF）
@@ -39,11 +40,12 @@ pip install pandas numpy matplotlib
 - `Muts`：突变数（不含缺失）
 - `Acount`/`Tcount`/`Ccount`/`Gcount`：突变为对应碱基的数量
 - `delcount`：缺失数量
+- `inscount`：插入数量（可选，若存在则自动进行 insertion 分析）
 
 示例表头：
 
 ```text
-Chrom	Pos	Template	Depths	Muts	Acount	Tcount	Ccount	Gcount	delcount
+Chrom	Pos	Template	Depths	Muts	Acount	Tcount	Ccount	Gcount	delcount	inscount
 ```
 
 ## 使用方法
@@ -97,6 +99,10 @@ run_mutation_analysis.bat
   - `normalized_position_base_specific_deletion_rates.png`
   - `normalized_position_deletion_rate.png`
   - `normalized_position_error_types_comparison.png`
+  - `insertion_rate_by_template_bar.png`
+  - `position_base_specific_insertion_rates.png`
+  - `insertion_rate_distribution.png`
+  - `base_specific_insertion_rates.png`
 
 ## 生成 PDF 报告
 HTML 报告不会自动打开。你可以：
