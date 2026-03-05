@@ -102,7 +102,7 @@ def compute_position_base_specific_deletion(df):
     _require_columns(df, ['Pos', 'Template', 'delcount', 'Depths'])
     grouped = df.groupby(['Pos', 'Template'])[['delcount', 'Depths']].sum()
     grouped['DelRate'] = grouped['delcount'] / grouped['Depths']
-    rates = grouped['DelRate'].unstack('Template').reindex(columns=BASES)
+    rates = grouped['DelRate'].unstack('Template').reindex(columns=BASES).fillna(0)
     rates.index.name = 'Pos'
     return rates
 
@@ -115,7 +115,7 @@ def compute_position_base_specific_insertion(df):
     _require_columns(df, ['Pos', 'Template', 'inscount', 'Depths'])
     grouped = df.groupby(['Pos', 'Template'])[['inscount', 'Depths']].sum()
     grouped['InsRate'] = grouped['inscount'] / grouped['Depths']
-    rates = grouped['InsRate'].unstack('Template').reindex(columns=BASES)
+    rates = grouped['InsRate'].unstack('Template').reindex(columns=BASES).fillna(0)
     rates.index.name = 'Pos'
     return rates
 
